@@ -1,0 +1,76 @@
+name: Compile Native Libs (vMeer)
+on:
+  workflow_dispatch:
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Menggunakan action NDK yang lebih stabil
+      - name: Setup NDK
+        uses: nndk/setup-ndk@v0
+        with:
+          ndk-version: r26b
+          add-to-path: true
+
+      - name: Compile Zstd
+        run: |
+          git clone --depth 1 https://github.com/facebook/zstd.git
+          cd zstd/build/cmake
+          cmake -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+                -DANDROID_ABI=arm64-v8a \
+                -DANDROID_PLATFORM=android-24 \
+                -DZSTD_BUILD_STATIC=ON \
+                -DZSTD_BUILD_SHARED=OFF \
+                -DZSTD_BUILD_PROGRAMS=OFF \
+                -DZSTD_BUILD_CONTRIB=OFF \
+                -DZSTD_BUILD_TESTS=OFF \
+                .
+          make -j$(nproc)
+          mkdir -p ../../output/include ../../output/libs/arm64-v8a
+          cp libzstd.a ../../output/libs/arm64-v8a/
+          cp ../../lib/zstd.h ../../output/include/
+
+      - name: Compile Libfuse (Static)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build
+          git clone --depth 1 https://github.com/libfuse/libfuse.git
+          cd libfuse
+          
+          # Gunakan path toolchain LLVM langsung dari NDK
+          TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
+          
+          cat > android_cross.txt <<EOF
+          [binaries]
+          c = '$TOOLCHAIN/aarch64-linux-android24-clang'
+          cpp = '$TOOLCHAIN/aarch64-linux-android24-clang++'
+          ar = '$TOOLCHAIN/llvm-ar'
+          strip = '$TOOLCHAIN/llvm-strip'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8-a'
+          endian = 'little'
+          EOF
+
+          meson setup builddir --cross-file android_cross.txt \
+                -Ddefault_library=static \
+                -Dexamples=false \
+                -Dtests=false \
+                -Dutils=false
+          ninja -C builddir
+          
+          cp builddir/lib/libfuse3.a ../output/libs/arm64-v8a/
+          mkdir -p ../output/include/fuse3
+          cp include/*.h ../output/include/fuse3/
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vMeer-Native-Libs-ARM64
+          path: output/
